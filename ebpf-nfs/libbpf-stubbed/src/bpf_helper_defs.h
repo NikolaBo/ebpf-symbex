@@ -229,7 +229,19 @@ static long (*bpf_map_update_elem)(void *map, const void *key,
  * Returns
  * 	0 on success, or a negative error in case of failure.
  */
+#ifdef USES_BPF_MAP_DELETE_ELEM
+static __attribute__ ((noinline)) long bpf_map_delete_elem(void *map, const void *key) {
+  struct bpf_map_def *map_ptr = ((struct bpf_map_def *)map);
+  // TRACE_VAL((uint32_t)(map_ptr), "map", _u32)
+  // TRACE_VAR(map_ptr->type, "bpf_map_type");
+  if (bpf_map_stub_types[map_ptr->map_id] == MapStub)
+    return map_delete_elem(bpf_map_stubs[map_ptr->map_id], key);
+  else
+    assert(0 && "Unsupported map type");
+}
+#else
 static long (*bpf_map_delete_elem)(void *map, const void *key) = (void *) 3;
+#endif
 
 /*
  * bpf_probe_read
@@ -567,6 +579,7 @@ static __attribute__ ((noinline)) void stub_init_pid_tgid(__u64 pt) {
 static __attribute__ ((noinline)) __u64 bpf_get_current_pid_tgid(void) {
   return pid_tgid;
 }
+#define INIT_PID_TGID(y) stub_init_pid_tgid(y)
 #else
 static __u64 (*bpf_get_current_pid_tgid)(void) = (void *) 14;
 #endif
@@ -1167,6 +1180,7 @@ static __attribute__ ((noinline)) void stub_init_current_task(struct task_struct
 static __attribute__ ((noinline)) struct task_struct *bpf_get_current_task() {
   return task;
 }
+#define INIT_CURRENT_TASK(y) stub_init_current_task(y)
 #else
 static __u64 (*bpf_get_current_task)(void) = (void *) 35;
 #endif
@@ -1414,7 +1428,19 @@ static long (*bpf_probe_read_str)(void *dst, __u32 size, const void *unsafe_ptr)
  * 	A 8-byte long unique number on success, or 0 if the socket
  * 	field is missing inside *skb*.
  */
+#ifdef USES_BPF_GET_SOCKET_COOKIE
+__u64 socket_cookie;
+static __attribute__ ((noinline)) void stub_init_socket_cookie(__u64 sc) {
+  socket_cookie = sc;
+}
+
+static __attribute__ ((noinline)) __u64 bpf_get_socket_cookie(void *ctx) {
+  return socket_cookie;
+}
+#define INIT_SOCKET_COOKIE(y) stub_init_socket_cookie(y)
+#else
 static __u64 (*bpf_get_socket_cookie)(void *ctx) = (void *) 46;
+#endif
 
 /*
  * bpf_get_socket_uid
@@ -4141,7 +4167,7 @@ static long (*bpf_task_storage_delete)(void *map, struct task_struct *task) = (v
  * Returns
  * 	Pointer to the current task.
  */
-#ifdef USES_BPF_GET_CURRENT_TASK
+#ifdef USES_BPF_GET_CURRENT_TASK_BTF
 // We make the harness define the task struct, they know best what they need to read
 // and how to make it symbolic. I don't know that a general symbolic task is feasible.
 static __attribute__ ((noinline)) struct task_struct *bpf_get_current_task_btf() {

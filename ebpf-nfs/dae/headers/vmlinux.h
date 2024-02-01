@@ -86,7 +86,7 @@ typedef __kernel_loff_t loff_t;
 
 typedef __kernel_size_t size_t;
 
-typedef __kernel_ssize_t ssize_t;
+typedef __ssize_t ssize_t; // changed to avoid conflict with stub headers
 
 typedef s32 int32_t;
 

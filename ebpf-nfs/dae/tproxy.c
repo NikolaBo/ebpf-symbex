@@ -8,9 +8,43 @@
 #include "klee/klee.h"
 #endif
 
+#ifndef USES_BPF_PROBE_READ_USER
+#define USES_BPF_PROBE_READ_USER
+#endif
+
+#ifndef USES_BPF_PROBE_READ_KERNEL
+#define USES_BPF_PROBE_READ_KERNEL
+#endif
+
+#ifdef CGROUP
+#ifndef USES_BPF_GET_CURRENT_PID_TGID
+#define USES_BPF_GET_CURRENT_PID_TGID
+#endif
+
+#ifndef USES_BPF_GET_CURRENT_TASK
+#define USES_BPF_GET_CURRENT_TASK
+#endif
+#endif // CGROUP
+
 #ifndef USES_BPF_GET_SOCKET_COOKIE
 #define USES_BPF_GET_SOCKET_COOKIE
-#endif 
+#endif
+
+#ifndef USES_BPF_MAP_LOOKUP_ELEM
+#define USES_BPF_MAP_LOOKUP_ELEM
+#endif
+
+#ifndef USES_BPF_MAP_UPDATE_ELEM
+#define USES_BPF_MAP_UPDATE_ELEM
+#endif
+
+#ifndef USES_BPF_MAP_DELETE_ELEM
+#define USES_BPF_MAP_DELETE_ELEM
+#endif
+
+#ifndef USES_BPF_MAPS
+#define USES_BPF_MAPS
+#endif
 
 #include "headers/errno-base.h"
 #include "headers/if_ether_defs.h"
@@ -185,6 +219,7 @@ struct {
 } tcp_dst_map
     SEC(".maps"); // This map is only for old method (redirect mode in WAN).
 
+#ifndef KLEE_VERIFICATION
 struct {
   __uint(type, BPF_MAP_TYPE_LRU_HASH);
   __type(key,
@@ -194,6 +229,14 @@ struct {
   __uint(pinning, LIBBPF_PIN_BY_NAME);
 } tgid_pname_map
     SEC(".maps"); // This map is only for old method (redirect mode in WAN).
+#else
+struct bpf_map_def SEC(".maps") tgid_pname_map = {
+    .type = BPF_MAP_TYPE_LRU_HASH,
+    .key_size = sizeof(__u32),
+    .value_size = sizeof(__u32[TASK_COMM_LEN / 4]),
+    .max_entries = MAX_TGID_PNAME_MAPPING_NUM,
+};
+#endif
 
 struct {
   __uint(type, BPF_MAP_TYPE_LRU_HASH);
@@ -371,6 +414,7 @@ struct pid_pname {
   char pname[TASK_COMM_LEN];
 };
 
+#ifndef KLEE_VERIFICATION
 struct {
   __uint(type, BPF_MAP_TYPE_LRU_HASH);
   __type(key, __u64);
@@ -379,6 +423,14 @@ struct {
   /// NOTICE: No persistence.
   __uint(pinning, LIBBPF_PIN_BY_NAME);
 } cookie_pid_map SEC(".maps");
+#else
+struct bpf_map_def SEC(".maps") cookie_pid_map = {
+    .type = BPF_MAP_TYPE_LRU_HASH,
+    .key_size = sizeof(__u64),
+    .value_size = sizeof(struct pid_pname),
+    .max_entries = MAX_COOKIE_PID_PNAME_MAPPING_NUM,
+};
+#endif
 
 // Functions:
 
@@ -1118,7 +1170,7 @@ route(const __u32 flag[8], const void *l4hdr, const __be32 saddr[4],
           *p_u16 <= match_set->port_range.port_end) {
         isdns_must_goodsubrule_badrule |= 0b10;
       }
-    } else if ((p_u32 = bpf_map_lookup_elem(&l4proto_ipversion_map, &key))) {
+    } else if ((p_u32 = `bpf_map_lookup_elem(&l4proto_ipversion_map, &key))) {
 #ifdef __DEBUG_ROUTING
       bpf_printk("CHECK: l4proto_ipversion_map, match_set->type: %u, not: %d, "
                  "outbound: %u",
@@ -1130,7 +1182,7 @@ route(const __u32 flag[8], const void *l4hdr, const __be32 saddr[4],
     } else {
       switch (key) {
       case MatchType_DomainSet:
-#ifdef __DEBUG_ROUTING
+#ifdef __DEBUG_ROUTING`
         bpf_printk("CHECK: domain, match_set->type: %u, not: %d, "
                    "outbound: %u",
                    match_set->type, match_set->not, match_set->outbound);
@@ -2285,6 +2337,20 @@ int tproxy_wan_cg_sock_release(struct bpf_sock *sk) {
   bpf_map_delete_elem(&cookie_pid_map, &cookie);
   return 1;
 }
+#ifdef RELEASE 
+int main(int argc, char **argv) {
+  __u64 socket_cookie;
+  klee_make_symbolic(&socket_cookie, sizeof socket_cookie, "socket cookie");
+  INIT_SOCKET_COOKIE(socket_cookie);
+
+  BPF_MAP_INIT(&cookie_pid_map, "cookie_pid_map", "", "");
+
+  if (tproxy_wan_cg_sock_release(0))
+    return 1;
+
+	return 0;
+}
+#endif // RELEASE
 SEC("cgroup/connect4")
 int tproxy_wan_cg_connect4(struct bpf_sock_addr *ctx) {
   update_map_elem_by_cookie(bpf_get_socket_cookie(ctx));
@@ -2306,12 +2372,30 @@ int tproxy_wan_cg_sendmsg6(struct bpf_sock_addr *ctx) {
   return 1;
 }
 
-#ifdef ENTER
-
+#ifdef CGROUP 
+// All the cgroup programs except tproxy_wan_cg_sock_release are essentially identical
 int main(int argc, char **argv) {
   __u64 socket_cookie;
   klee_make_symbolic(&socket_cookie, sizeof socket_cookie, "socket cookie");
-  SOCKET_COOKIE_INIT(socket_cookie);
+  INIT_SOCKET_COOKIE(socket_cookie);
+  __u64 pid_tgid;
+  klee_make_symbolic(&pid_tgid, sizeof pid_tgid, "pid_tgid");
+  INIT_PID_TGID(pid_tgid);
+
+  BPF_MAP_INIT(&cookie_pid_map, "cookie_pid_map", "", "");
+  BPF_MAP_INIT(&tgid_pname_map, "tgid_pname_map", "", "");
+
+  struct task_struct t;
+  t.tgid = klee_int("tgid");
+
+  struct mm_struct mm;
+  t.mm = &mm;
+  char buf[8]; // Symbex time gets crazy as this approaches MAX_ARG_LEN_TO_PROBE
+  klee_make_symbolic(&buf, sizeof buf, "buf");
+  mm.arg_start = (unsigned long) &buf;
+  mm.arg_end = mm.arg_start + sizeof buf;
+
+	stub_init_current_task(&t);
 
   if (tproxy_wan_cg_sendmsg6(0))
     return 1;
@@ -2319,6 +2403,6 @@ int main(int argc, char **argv) {
 	return 0;
 }
 
-#endif // MSG6
+#endif // CGROUP
 
 SEC("license") const char __license[] = "Dual BSD/GPL";
