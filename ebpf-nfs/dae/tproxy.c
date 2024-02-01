@@ -1170,7 +1170,7 @@ route(const __u32 flag[8], const void *l4hdr, const __be32 saddr[4],
           *p_u16 <= match_set->port_range.port_end) {
         isdns_must_goodsubrule_badrule |= 0b10;
       }
-    } else if ((p_u32 = `bpf_map_lookup_elem(&l4proto_ipversion_map, &key))) {
+    } else if ((p_u32 = bpf_map_lookup_elem(&l4proto_ipversion_map, &key))) {
 #ifdef __DEBUG_ROUTING
       bpf_printk("CHECK: l4proto_ipversion_map, match_set->type: %u, not: %d, "
                  "outbound: %u",
@@ -1182,7 +1182,7 @@ route(const __u32 flag[8], const void *l4hdr, const __be32 saddr[4],
     } else {
       switch (key) {
       case MatchType_DomainSet:
-#ifdef __DEBUG_ROUTING`
+#ifdef __DEBUG_ROUTING
         bpf_printk("CHECK: domain, match_set->type: %u, not: %d, "
                    "outbound: %u",
                    match_set->type, match_set->not, match_set->outbound);
